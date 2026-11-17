@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Help Desk Tickets</title>
+<style>
+  :root {
+    --bg: #eef1f4; --panel: #ffffff; --ink: #1d2a35; --muted: #5d6b78;
+    --line: #d5dbe1; --accent: #0f6e63; --accent-ink: #ffffff;
+    --high: #b3261e; --medium: #a15c00; --low: #3b6b2f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .counts { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+  .counts div { background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+    padding: 10px 16px; min-width: 110px; }
+  .counts b { display: block; font-size: 1.5rem; }
+  form, .ticket { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 16px; }
+  form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+  form .full { grid-column: 1 / -1; }
+  label { display: block; font-size: .85rem; color: var(--muted); margin-bottom: 4px; }
+  input, select, textarea { width: 100%; padding: 8px 10px; font: inherit; color: inherit;
+    border: 1px solid var(--line); border-radius: 4px; background: #fff; }
+  textarea { min-height: 70px; resize: vertical; }
+  button { font: inherit; cursor: pointer; border-radius: 4px; padding: 8px 14px;
+    border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); }
+  button.ghost { background: transparent; color: var(--accent); }
+  button.danger { border-color: var(--high); color: var(--high); background: transparent; }
+  :focus-visible { outline: 3px solid #f2b705; outline-offset: 2px; }
+  .filters { display: flex; gap: 8px; margin-bottom: 12px; }
+  .filters button { background: transparent; color: var(--ink); border-color: var(--line); }
+  .filters button[aria-pressed="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .ticket { margin-bottom: 10px; border-left: 5px solid var(--line); }
+  .ticket.high { border-left-color: var(--high); }
+  .ticket.medium { border-left-color: var(--medium); }
+  .ticket.low { border-left-color: var(--low); }
+  .ticket.closed { opacity: .75; border-left-color: var(--muted); }
+  .top { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .id { font-weight: 700; }
+  .meta { color: var(--muted); font-size: .85rem; }
+  .badge { font-size: .8rem; padding: 1px 8px; border-radius: 10px; border: 1px solid currentColor; }
+  .badge.high { color: var(--high); } .badge.medium { color: var(--medium); } .badge.low { color: var(--low); }
+  .resolution { margin-top: 8px; padding: 8px 10px; background: #e7f2ef; border-radius: 4px; font-size: .9rem; }
+  .actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .empty { text-align: center; color: var(--muted); padding: 32px 0; }
+  @media (max-width: 560px) { form { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Help Desk Tickets</h1>
+  <p class="sub">Log a call, track it, and close it with a resolution note.</p>
+
+  <div class="counts" aria-live="polite">
+    <div><b id="cOpen">0</b>Open</div>
+    <div><b id="cClosed">0</b>Closed</div>
+    <div><b id="cTotal">0</b>Total</div>
+  </div>
+
+  <form id="form">
+    <div><label for="caller">Caller name</label><input id="caller" required></div>
+    <div><label for="contact">Phone or email</label><input id="contact"></div>
+    <div><label for="category">Category</label>
+      <select id="category">
+        <option>Hardware</option><option>Software</option><option>Network</option>
+        <option>Account / Password</option><option>Other</option>
+      </select></div>
+    <div><label for="priority">Priority</label>
+      <select id="priority">
+        <option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option>
+      </select></div>
+    <div class="full"><label for="issue">Issue description</label><textarea id="issue" required></textarea></div>
+    <div class="full"><button type="submit">Log ticket</button></div>
+  </form>
+
+  <div class="filters" role="group" aria-label="Filter tickets">
+    <button data-f="all" aria-pressed="true">All</button>
+    <button data-f="open" aria-pressed="false">Open</button>
+    <button data-f="closed" aria-pressed="false">Closed</button>
+  </div>
+
+  <div id="list"></div>
+</main>
+
+<script>
+  const KEY = "helpdesk-tickets";
+  let tickets = [];
+  let filter = "all";
+
+  // Load saved tickets (wrapped in try/catch in case storage is blocked)
+  try { tickets = JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) { tickets = []; }
+
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(tickets)); } catch (e) {}
+  }
+
+  function esc(s) {
+    const d = document.createElement("div");
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function fmt(iso) {
+    return new Date(iso).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+  }
+
+  function nextId() {
+    const max = tickets.reduce((m, t) => Math.max(m, t.num), 0);
+    return max + 1;
+  }
+
+  function render() {
+    const open = tickets.filter(t => t.status === "open").length;
+    document.getElementById("cOpen").textContent = open;
+    document.getElementById("cClosed").textContent = tickets.length - open;
+    document.getElementById("cTotal").textContent = tickets.length;
+
+    const shown = tickets
+      .filter(t => filter === "all" || t.status === filter)
+      .sort((a, b) => b.num - a.num);
+
+    const list = document.getElementById("list");
+    if (!shown.length) {
+      list.innerHTML = '<div class="empty">No tickets here yet. Log a call above to get started.</div>';
+      return;
+    }
+
+    list.innerHTML = shown.map(t => `
+      <article class="ticket ${t.priority} ${t.status}">
+        <div class="top">
+          <span><span class="id">#${String(t.num).padStart(4, "0")}</span> ${esc(t.caller)}</span>
+          <span><span class="badge ${t.priority}">${t.priority}</span>
+            <span class="badge">${t.status}</span></span>
+        </div>
+        <div class="meta">${esc(t.category)} · logged ${fmt(t.created)}${t.contact ? " · " + esc(t.contact) : ""}</div>
+        <p>${esc(t.issue)}</p>
+        ${t.status === "closed" ? `<div class="resolution"><b>Resolution:</b> ${esc(t.resolution)}<br>
+          <span class="meta">Closed ${fmt(t.closedAt)}</span></div>` : ""}
+        <div class="actions">
+          ${t.status === "open"
+            ? `<button data-act="close" data-id="${t.num}">Close ticket</button>`
+            : `<button class="ghost" data-act="reopen" data-id="${t.num}">Reopen</button>`}
+          <button class="danger" data-act="delete" data-id="${t.num}">Delete</button>
+        </div>
+      </article>`).join("");
+  }
+
+  document.getElementById("form").addEventListener("submit", e => {
+    e.preventDefault();
+    tickets.push({
+      num: nextId(),
+      caller: caller.value.trim(),
+      contact: contact.value.trim(),
+      category: category.value,
+      priority: priority.value,
+      issue: issue.value.trim(),
+      status: "open",
+      created: new Date().toISOString()
+    });
+    save();
+    e.target.reset();
+    render();
+  });
+
+  document.getElementById("list").addEventListener("click", e => {
+    const btn = e.target.closest("button[data-act]");
+    if (!btn) return;
+    const t = tickets.find(x => x.num === Number(btn.dataset.id));
+    if (!t) return;
+
+    if (btn.dataset.act === "close") {
+      const note = prompt("How was this resolved?");
+      if (note === null) return;
+      t.status = "closed";
+      t.resolution = note.trim() || "No notes added.";
+      t.closedAt = new Date().toISOString();
+    } else if (btn.dataset.act === "reopen") {
+      t.status = "open";
+      delete t.resolution;
+      delete t.closedAt;
+    } else if (btn.dataset.act === "delete") {
+      if (!confirm("Delete this ticket permanently?")) return;
+      tickets = tickets.filter(x => x !== t);
+    }
+    save();
+    render();
+  });
+
+  document.querySelector(".filters").addEventListener("click", e => {
+    const btn = e.target.closest("button[data-f]");
+    if (!btn) return;
+    filter = btn.dataset.f;
+    document.querySelectorAll(".filters button").forEach(b =>
+      b.setAttribute("aria-pressed", b === btn));
+    render();
+  });
+
+  render();
+</script>
+</body>
+</html>
